@@ -20,17 +20,33 @@ export default function Chatbot() {
 
   // ✅ Send message to Gemini
   const sendMessage = async () => {
-    if (!input.trim()) return;
-    const newMessages = [...messages, { role: "user", text: input }];
-    setMessages(newMessages);
-    setInput("");
-    setLoading(true);
+  if (!input.trim()) return;
 
-    const reply = await askGemini(input);
-    setMessages([...newMessages, { role: "bot", text: reply }]);
-    speak(reply); // make bot talk
-    setLoading(false);
-  };
+  const newMessages = [...messages, { role: "user", text: input }];
+  setMessages(newMessages);
+  setInput("");
+  setLoading(true);
+
+  let reply = "";
+
+  const text = input.toLowerCase().trim();
+  console.log("User input:", text); // Debugging
+
+  if (text === "hey" || text === "hello") {
+    reply = "Hello! How can I assist you today?";
+  } else if (text.includes("course") || text.includes("show")) {
+    reply = "Here are the courses: Mastery in Python, Firebase Intro, Intro to React, Design Tools.";
+  } else {
+    reply = await askGemini(input);
+  }
+
+  setMessages([...newMessages, { role: "bot", text: reply }]);
+  setLoading(false);
+  speak(reply);
+};
+;
+
+
 
   // ✅ Start Listening (STT)
   const startListening = () => {

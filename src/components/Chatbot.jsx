@@ -9,67 +9,66 @@ export default function Chatbot() {
   const [loading, setLoading] = useState(false);
   const [listening, setListening] = useState(false);
 
-  let recognition; // Speech recognition instance
+  let recognition;
 
-  // ✅ Bot Speech Function (TTS)
-  // ✅ Bot Speech Function (TTS)
-const speak = (text) => {
-  if (!window.speechSynthesis) return;
-
-  // Stop previous speech before starting a new one
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = "en-US";
-
-  // Optional: Stop when finished
-  utterance.onend = () => {
-    console.log("Speech finished.");
+  const speak = (text) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-US";
+    utterance.onend = () => console.log("Speech finished.");
+    window.speechSynthesis.speak(utterance);
   };
 
-  window.speechSynthesis.speak(utterance);
+  const sendMessage = async () => {
+  if (!input.trim()) return;
+  
+  const newMessages = [...messages, { role: "user", text: input }];
+  setMessages(newMessages);
+  setInput("");
+  setLoading(true);
+
+  const text = input.toLowerCase().trim();
+  let reply = "";
+
+  // ✅ Check greetings first
+  if (text === "hey" || text === "hello") {
+    reply = "Hello! How can I assist you today?";
+  }
+  // ✅ Check if user wants to see courses
+  else if (text.includes("course") || text.includes("show")) {
+    reply = "Here are the courses: Mastery in Python, Firebase Intro, Intro to React, Design Tools.";
+  }
+  // ✅ For other inputs, ask Gemini
+  else {
+    reply = await askGemini(input);
+  }
+
+  setMessages([...newMessages, { role: "bot", text: reply }]);
+  setLoading(false);
+  speak(reply);
 };
 
 
-  // ✅ Send message
-  const sendMessage = async () => {
-    if (!input.trim()) return;
-    const newMessages = [...messages, { role: "user", text: input }];
-    setMessages(newMessages);
-    setInput("");
-    setLoading(true);
-
-    const reply = await askGemini(input);
-    setMessages([...newMessages, { role: "bot", text: reply }]);
-    speak(reply);
-    setLoading(false);
-  };
-
-  // ✅ Start Listening (STT)
   const startListening = () => {
     if (!("webkitSpeechRecognition" in window)) {
       alert("Your browser does not support Speech Recognition. Try Chrome.");
       return;
     }
-
     recognition = new window.webkitSpeechRecognition();
     recognition.lang = "en-US";
     recognition.continuous = false;
     recognition.interimResults = false;
-
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
-
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
       setTimeout(() => sendMessage(), 300);
     };
-
     recognition.start();
   };
 
-  // ✅ Stop Listening
   const stopListening = () => {
     if (recognition) {
       recognition.stop();
@@ -78,16 +77,15 @@ const speak = (text) => {
   };
 
   return (
-    
     <motion.div
       initial={{ opacity: 0, y: 50, scale: 0.95 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.4, ease: "easeOut" }}
-      className="fixed bottom-6 right-6 w-96 bg-[#1e1e2f] text-white rounded-2xl shadow-2xl flex flex-col border border-gray-700"
+      className="w-full max-w-md bg-[#1e1e2f] text-white rounded-2xl shadow-2xl flex flex-col border border-gray-700"
     >
       {/* Header */}
-      <div className="p-4 bg-gradient-to-r from-orange-700 to-black-600 rounded-t-2xl border-b border-gray-700">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
+      <div className="p-4 bg-gradient-to-r from-orange-700 to-gray-800 rounded-t-2xl border-b border-gray-700">
+        <h2 className="text-lg font-semibold flex items-center justify-center gap-2">
           🤖 AI Assistant
         </h2>
       </div>
@@ -102,9 +100,7 @@ const speak = (text) => {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              className={`flex ${
-                m.role === "user" ? "justify-end" : "justify-start"
-              }`}
+              className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
             >
               <span
                 className={`px-3 py-2 rounded-2xl max-w-[75%] text-sm shadow-md ${
@@ -120,11 +116,7 @@ const speak = (text) => {
         </AnimatePresence>
 
         {loading && (
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="text-gray-400 text-sm"
-          >
+          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-gray-400 text-sm">
             Typing...
           </motion.p>
         )}
@@ -147,14 +139,11 @@ const speak = (text) => {
           Send
         </motion.button>
 
-        {/* 🎤 Mic Button */}
         <motion.button
           whileTap={{ scale: 0.9 }}
           onClick={listening ? stopListening : startListening}
           className={`ml-2 p-3 rounded-full transition ${
-            listening
-              ? "bg-red-600 animate-pulse"
-              : "bg-yellow-600 hover:bg-green-700"
+            listening ? "bg-red-600 animate-pulse" : "bg-yellow-600 hover:bg-green-700"
           }`}
         >
           {listening ? <FaStop /> : <FaMicrophone />}
