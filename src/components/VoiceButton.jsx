@@ -19,7 +19,8 @@ export default function Chatbot() {
   };
 
   // ✅ Send message to Gemini
-  const sendMessage = async () => {
+  // ✅ Send message to Gemini
+const sendMessage = async () => {
   if (!input.trim()) return;
 
   const newMessages = [...messages, { role: "user", text: input }];
@@ -29,22 +30,28 @@ export default function Chatbot() {
 
   let reply = "";
 
-  const text = input.toLowerCase().trim();
-  console.log("User input:", text); // Debugging
+  try {
+    const text = input.toLowerCase().trim();
+    console.log("User input:", text);
 
-  if (text === "hey" || text === "hello") {
-    reply = "Hello! How can I assist you today?";
-  } else if (text.includes("course") || text.includes("show")) {
-    reply = "Here are the courses: Mastery in Python, Firebase Intro, Intro to React, Design Tools.";
-  } else {
-    reply = await askGemini(input);
+    // 🎯 Only shortcut: friendly greeting
+    if (text === "hey" || text === "hello") {
+      reply = "Hello! How can I assist you today?";
+    } else {
+      // ✅ Always use Gemini (with Firestore context + user question)
+      reply = await askGemini(input);
+    }
+  } catch (error) {
+    console.error("Chatbot error:", error);
+    reply = "Sorry, something went wrong.";
   }
 
   setMessages([...newMessages, { role: "bot", text: reply }]);
   setLoading(false);
   speak(reply);
 };
-;
+
+
 
 
 

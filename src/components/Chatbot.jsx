@@ -22,26 +22,28 @@ export default function Chatbot() {
 
   const sendMessage = async () => {
   if (!input.trim()) return;
-  
+
   const newMessages = [...messages, { role: "user", text: input }];
   setMessages(newMessages);
   setInput("");
   setLoading(true);
 
-  const text = input.toLowerCase().trim();
   let reply = "";
 
-  // ✅ Check greetings first
-  if (text === "hey" || text === "hello") {
-    reply = "Hello! How can I assist you today?";
-  }
-  // ✅ Check if user wants to see courses
-  else if (text.includes("course") || text.includes("show")) {
-    reply = "Here are the courses: Mastery in Python, Firebase Intro, Intro to React, Design Tools.";
-  }
-  // ✅ For other inputs, ask Gemini
-  else {
-    reply = await askGemini(input);
+  try {
+    const text = input.toLowerCase().trim();
+    console.log("User input:", text);
+
+    // 🎯 Only shortcut: friendly greeting
+    if (text === "hey" || text === "hello") {
+      reply = "Hello! How can I assist you today?";
+    } else {
+      // ✅ Always use Gemini (with Firestore context + user question)
+      reply = await askGemini(input);
+    }
+  } catch (error) {
+    console.error("Chatbot error:", error);
+    reply = "Sorry, something went wrong.";
   }
 
   setMessages([...newMessages, { role: "bot", text: reply }]);
