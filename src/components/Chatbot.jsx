@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { askGemini } from "../services/gemini";
 import { FaMicrophone, FaStop } from "react-icons/fa";
 import { motion, AnimatePresence } from "framer-motion";
+import { askBackend } from "../services/api";
 
 export default function Chatbot() {
   const [messages, setMessages] = useState([]);
@@ -38,8 +38,8 @@ export default function Chatbot() {
     if (text === "hey" || text === "hello") {
       reply = "Hello! How can I assist you today?";
     } else {
-      // ✅ Always use Gemini (with Firestore context + user question)
-      reply = await askGemini(input);
+      // ✅ Always use Cerebras (with Firestore context + user question)
+      reply = await askBackend(input);
     }
   } catch (error) {
     console.error("Chatbot error:", error);
