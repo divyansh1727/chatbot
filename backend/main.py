@@ -5,12 +5,8 @@ import requests
 from bs4 import BeautifulSoup
 import faiss
 import numpy as np
-import os
-from openai import OpenAI
-
-
-# ✅ Load OpenAI key
-client = OpenAI(api_key="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")
+import time
+from sentence_transformers import SentenceTransformer
 
 # --- FastAPI setup ---
 app = FastAPI()
@@ -25,9 +21,12 @@ app.add_middleware(
 )
 
 # --- In-memory FAISS store ---
-DIM = 1536  # embedding size for text-embedding-3-small
+DIM = 384  # dimension for all-MiniLM-L6-v2 embeddings
 index = faiss.IndexFlatL2(DIM)
-chunks_store = []  # keep track of text chunks
+chunks_store = []
+
+# --- Load local embedding model ---
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # --- Models ---
 class Query(BaseModel):
@@ -38,13 +37,25 @@ class IngestRequest(BaseModel):
 
 # --- Helpers ---
 def scrape_page(url: str):
-    res = requests.get(url)
-    soup = BeautifulSoup(res.text, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer"]):
-        tag.decompose()
-    return " ".join(soup.stripped_strings)
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        res = requests.get(url, headers=headers, timeout=15)
+        res.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error fetching URL: {e}")
 
-def chunk_text(text, chunk_size=500, overlap=50):
+    soup = BeautifulSoup(res.text, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "table", "noscript", "svg"]):
+        tag.decompose()
+
+    content = soup.find("div", {"id": "mw-content-text"})
+    text = content.get_text(separator=" ", strip=True) if content else soup.get_text(separator=" ", strip=True)
+    text = " ".join(text.split())
+    if len(text) < 200:
+        print("[WARN] Very short text scraped. Site might have blocked scraping.")
+    return text
+
+def chunk_text(text, chunk_size=200, overlap=50):
     words = text.split()
     chunks = []
     start = 0
@@ -55,13 +66,17 @@ def chunk_text(text, chunk_size=500, overlap=50):
     return chunks
 
 def get_embedding_safe(text: str):
-    """
-    MOCK embedding for local testing.
-    Returns a random vector of size 1536 instead of calling OpenAI.
-    """
-    return np.random.rand(1536).astype("float32").tolist()
+    """Generate embedding vector using local model."""
+    return embedding_model.encode(text).tolist()
+
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 # --- Endpoints ---
+@app.get("/")
+def root():
+    return {"message": "🚀 Local embeddings RAG backend running successfully!"}
+
 @app.post("/ingest")
 def ingest(req: IngestRequest):
     global chunks_store, index
@@ -70,41 +85,44 @@ def ingest(req: IngestRequest):
         print(f"[DEBUG] Scraping URL: {url}")
         text = scrape_page(url)
         print(f"[DEBUG] Scraped text length: {len(text)}")
-        
+
         if not text:
             raise HTTPException(status_code=400, detail="No text found on the page.")
 
         chunks = chunk_text(text)
-        print(f"[DEBUG] Number of chunks: {len(chunks)}")
+        print(f"[DEBUG] Total chunks: {len(chunks)}")
 
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             emb = get_embedding_safe(chunk)
             emb = np.array([emb], dtype="float32")
             index.add(emb)
             chunks_store.append(chunk)
+            print(f"[INFO] Added chunk {i+1}/{len(chunks)}")
+            time.sleep(0.1)  # small delay
 
         return {"status": "success", "chunks_stored": len(chunks)}
 
-    except requests.RequestException as e:
-        print("[ERROR] Requests error:", e)
-        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
     except Exception as e:
-        print("[ERROR] Ingest failed:", e)
+        print(f"[ERROR] Ingest error: {e}")
         raise HTTPException(status_code=500, detail=f"Ingest error: {str(e)}")
 
-@app.get("/")
-def read_root():
-    return {"message": "Backend is running successfully 🚀"}
 @app.post("/ask")
 def ask(query: Query):
     if not chunks_store:
         return {"answer": "⚠️ No data ingested yet. Please call /ingest first."}
 
-    q_emb = get_embedding_safe(query.query)
-    q_emb = np.array([q_emb], dtype="float32")
-    distances, indices = index.search(q_emb, k=3)
+    try:
+        q_emb = get_embedding_safe(query.query)
+        q_emb = np.array([q_emb], dtype="float32")
 
-    retrieved = [chunks_store[i] for i in indices[0]]
-    answer = " ".join(retrieved[:2])  # simple concatenation for now
+        distances, indices = index.search(q_emb, k=3)
+        retrieved = [chunks_store[i] for i in indices[0]]
+        context = " ".join(retrieved)
 
-    return {"answer": answer}
+        # Simple local "response" using context
+        answer = f"Based on the ingested context: {context[:500]}..."  # return first 500 chars
+        return {"answer": answer}
+
+    except Exception as e:
+        print(f"[ERROR] Ask endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=f"Ask endpoint error: {str(e)}")

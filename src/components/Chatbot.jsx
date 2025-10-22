@@ -12,13 +12,14 @@ export default function Chatbot() {
   let recognition;
 
   const speak = (text) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US";
-    utterance.onend = () => console.log("Speech finished.");
-    window.speechSynthesis.speak(utterance);
-  };
+  if (!window.speechSynthesis) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "en-US";
+  utterance.pitch = 1;
+  utterance.rate = 1;
+  window.speechSynthesis.speak(utterance);
+};
+
 
   const sendMessage = async () => {
   if (!input.trim()) return;
@@ -53,23 +54,35 @@ export default function Chatbot() {
 
 
   const startListening = () => {
-    if (!("webkitSpeechRecognition" in window)) {
-      alert("Your browser does not support Speech Recognition. Try Chrome.");
+  try {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Speech recognition not supported on this browser.");
       return;
     }
-    recognition = new window.webkitSpeechRecognition();
+
+    recognition = new SpeechRecognition();
     recognition.lang = "en-US";
     recognition.continuous = false;
     recognition.interimResults = false;
+
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
+    recognition.onerror = (e) => {
+      console.error("Speech recognition error:", e);
+      setListening(false);
+    };
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setInput(transcript);
       setTimeout(() => sendMessage(), 300);
     };
     recognition.start();
-  };
+  } catch (e) {
+    console.error(e);
+  }
+};
+
 
   const stopListening = () => {
     if (recognition) {
