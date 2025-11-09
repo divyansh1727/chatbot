@@ -1,15 +1,23 @@
-// src/services/api.js
+const BASE_URL = "http://127.0.0.1:8080";
+
 export async function askBackend(question) {
   try {
-    const res = await fetch("http://localhost:8000/ask", {
+    const res = await fetch(`${BASE_URL}/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: question }),
     });
+    
+
     const data = await res.json();
-    return data.answer || "Sorry, I couldn’t understand.";
+    console.log("Backend response:", data); // 👀 for debugging
+
+    return {
+      answer: data.answer || "Sorry, I couldn’t understand.",
+      mood: data.mood || "neutral",
+    };
   } catch (err) {
     console.error("API error:", err);
-    return "⚠️ Backend is not responding.";
+    return { text: "⚠️ Backend is not responding.", mood: "error" };
   }
 }

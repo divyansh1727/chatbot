@@ -1,40 +1,45 @@
-from transformers import pipeline
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import requests
+from transformers import pipeline
+from sentence_transformers import SentenceTransformer
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import faiss
 import numpy as np
-import time
-from sentence_transformers import SentenceTransformer
 
-# --- Load Models ---
-print("🔄 Loading models... this may take a moment.")
+# -------------------------------
+# 🔹 MODEL LOADING
+# -------------------------------
+print("🔄 Loading models... please wait.")
 emotion_model = pipeline("text-classification", model="bhadresh-savani/distilbert-base-uncased-emotion")
-chat_model = pipeline("text-generation", model="distilgpt2", max_length=200, temperature=0.7)
-
-
+chat_model = pipeline("text2text-generation", model="google/flan-t5-base")  # ✅ safe, smart, light
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 print("✅ Models loaded successfully!")
 
-# --- FastAPI Setup ---
-app = FastAPI()
+# -------------------------------
+# 🔹 FASTAPI SETUP
+# -------------------------------
+app = FastAPI(title="CourseTeen Chatbot Backend", version="2.0")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=["*", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Memory / Store ---
+# -------------------------------
+# 🔹 VECTOR STORE (FAISS)
+# -------------------------------
 DIM = 384
 index = faiss.IndexFlatL2(DIM)
 chunks_store = []
-conversation_history = []
 
-# --- Data Models ---
+# -------------------------------
+# 🔹 DATA MODELS
+# -------------------------------
 class Query(BaseModel):
     query: str
 
@@ -44,28 +49,11 @@ class IngestRequest(BaseModel):
 class TextIngestRequest(BaseModel):
     text: str
 
-# --- Helper Functions ---
-def scrape_page(url: str):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        res = requests.get(url, headers=headers, timeout=15)
-        res.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error fetching URL: {e}")
-
-    soup = BeautifulSoup(res.text, "html.parser")
-    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg"]):
-        tag.decompose()
-
-    text = soup.get_text(separator=" ", strip=True)
-    text = " ".join(text.split())
-    if len(text) < 200:
-        print("[WARN] Very short text scraped — site may be JS-rendered.")
-    return text
-
-
+# -------------------------------
+# 🔹 HELPERS
+# -------------------------------
 def chunk_text(text, chunk_size=200, overlap=50):
-    """Splits large text into overlapping chunks for better retrieval."""
+    """Split text into overlapping chunks."""
     words = text.split()
     chunks = []
     start = 0
@@ -75,124 +63,103 @@ def chunk_text(text, chunk_size=200, overlap=50):
         start += chunk_size - overlap
     return chunks
 
-
-def get_embedding_safe(text: str):
+def get_embedding(text: str):
+    """Get vector embedding."""
     return embedding_model.encode(text).tolist()
 
+def scrape_page_playwright(url: str) -> str:
+    """Scrape JS-rendered page content."""
+    print(f"[INFO] Navigating to {url}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        page.goto(url, timeout=60000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=40000)
+        except Exception:
+            print("[WARN] Network idle timeout; continuing anyway.")
+        html = page.content()
+        browser.close()
 
-# --- Routes ---
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)
+    return " ".join(text.split())
+
+def ingest_text_internal(text: str):
+    """Embed and store text in FAISS."""
+    global index, chunks_store
+    chunks = chunk_text(text)
+    for chunk in chunks:
+        emb = np.array([get_embedding(chunk)], dtype="float32")
+        index.add(emb)
+        chunks_store.append(chunk)
+    print(f"✅ Stored {len(chunks)} chunks.")
+
+# -------------------------------
+# 🔹 ROUTES
+# -------------------------------
 @app.get("/")
 def root():
-    return {"message": "🚀 Local embeddings RAG backend with emotion-based chatbot active!"}
-
-
-@app.post("/ingest")
-def ingest(req: IngestRequest):
-    """Scrape and ingest a webpage."""
-    global chunks_store, index
-    url = req.url.strip().strip('"')
-    print(f"[DEBUG] Scraping: {url}")
-    text = scrape_page(url)
-    chunks = chunk_text(text)
-    for chunk in chunks:
-        emb = np.array([get_embedding_safe(chunk)], dtype="float32")
-        index.add(emb)
-        chunks_store.append(chunk)
-        time.sleep(0.05)
-    return {"status": "success", "chunks_stored": len(chunks)}
-
-
-@app.post("/ingest_text")
-def ingest_text(req: TextIngestRequest):
-    """Ingest custom text directly (like your CourseTeen details)."""
-    global chunks_store, index
-    text = req.text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="No text provided for ingestion.")
-    chunks = chunk_text(text)
-    for chunk in chunks:
-        emb = np.array([get_embedding_safe(chunk)], dtype="float32")
-        index.add(emb)
-        chunks_store.append(chunk)
-    return {"status": "success", "chunks_stored": len(chunks)}
-
+    return {"message": "🚀 CourseTeen RAG + Emotion Chatbot running!"}
 
 @app.post("/ingest_url")
 def ingest_url(req: IngestRequest):
-    """Auto-ingest data from a live website like CourseTeen."""
-    global chunks_store, index
-    url = req.url.strip().strip('"')
-    print(f"[INFO] Fetching and embedding from: {url}")
+    """Scrape and embed content from a site."""
+    url = req.url.strip()
     try:
-        text = scrape_page(url)
-        chunks = chunk_text(text)
-        for chunk in chunks:
-            emb = np.array([get_embedding_safe(chunk)], dtype="float32")
-            index.add(emb)
-            chunks_store.append(chunk)
-        return {"status": "success", "chunks_stored": len(chunks)}
+        text = scrape_page_playwright(url)
+        if len(text) < 100:
+            raise HTTPException(status_code=500, detail="Empty or blocked page.")
+        ingest_text_internal(text)
+        return {"status": "success", "chunks_stored": len(chunks_store)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error ingesting URL: {e}")
 
+@app.post("/ingest_text")
+def ingest_text(req: TextIngestRequest):
+    """Manually ingest text."""
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text provided.")
+    ingest_text_internal(text)
+    return {"status": "success", "chunks_stored": len(chunks_store)}
 
 @app.post("/ask")
 def ask(query: Query):
-    """Answer questions using RAG + Emotion detection."""
-    global conversation_history
-
+    """Answer using context + emotion awareness."""
     if not chunks_store:
-        return {"answer": "⚠️ No data ingested yet. Please use /ingest or /ingest_text first.", "mood": "neutral"}
+        return {"answer": "⚠️ Please ingest some text first.", "mood": "neutral"}
 
-    # --- Retrieve most relevant context ---
-    q_emb = np.array([get_embedding_safe(query.query)], dtype="float32")
+    user_input = query.query.strip()
+    q_emb = np.array([get_embedding(user_input)], dtype="float32")
     distances, indices = index.search(q_emb, k=3)
-    retrieved = [chunks_store[i] for i in indices[0]]
-    context = " ".join(retrieved)
+    context = " ".join(chunks_store[i] for i in indices[0])
 
-    # --- Emotion detection ---
-    emotion_result = emotion_model(query.query)[0]
+    # Detect emotion
+    emotion_result = emotion_model(user_input)[0]
     emotion = emotion_result["label"].lower()
     confidence = round(emotion_result["score"] * 100, 2)
 
     emoji_map = {
-        "anger": "😠",
-        "joy": "😄",
-        "sadness": "😢",
-        "fear": "😨",
-        "love": "❤️",
-        "surprise": "😲",
+        "anger": "😠", "joy": "😄", "sadness": "😢",
+        "fear": "😨", "love": "❤️", "surprise": "😲"
     }
     emoji = emoji_map.get(emotion, "🙂")
 
-    tone_instructions = {
-        "joy": "Respond in a cheerful, upbeat tone.",
-        "sadness": "Respond empathetically and offer encouragement.",
-        "anger": "Stay calm and respond respectfully.",
-        "love": "Respond warmly and positively.",
-        "fear": "Reassure the user gently.",
-        "surprise": "Respond with excitement and positivity.",
-    }
-    tone = tone_instructions.get(emotion, "Respond helpfully and clearly.")
-
-    # --- Build prompt ---
+    # Build smart prompt for Flan-T5
     prompt = (
-        f"Context: {context[:700]}\n"
-        f"{tone}\n"
-        f"Conversation history:\n{conversation_history[-3:]}\n"
-        f"User: {query.query}\nAssistant:"
+        f"The user is feeling {emotion}. Be empathetic.\n\n"
+        f"Use the context below to answer clearly:\n"
+        f"Context: {context[:700]}\n\n"
+        f"User: {user_input}\n"
+        f"Assistant:"
     )
 
-    result = chat_model(prompt, do_sample=True, temperature=0.8, max_new_tokens=100)
-    answer = result[0]["generated_text"].split("Assistant:")[-1].strip()
-
-
-   
-
-    conversation_history.append(f"User: {query.query}")
-    conversation_history.append(f"Assistant: {answer}")
-
-    return {
-        "answer": f"{emoji} {answer}",
-        "mood": emotion,
-        "confidence": confidence,
-    }
+    try:
+        result = chat_model(prompt, max_new_tokens=200, temperature=0.6, top_p=0.9)
+        answer = result[0]["generated_text"].split("Assistant:")[-1].strip()
+        return {"answer": f"{emoji} {answer}", "mood": emotion, "confidence": confidence}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating response: {e}")
